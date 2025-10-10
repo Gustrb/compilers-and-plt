@@ -16,3 +16,6 @@ Type Theory 
 - [ ] https://sdiehl.github.io/typechecker-zoo/foundations/type-systems.html
 - [ ] https://github.com/jozefg/learn-tt?tab=readme-ov-file
 
+Category Theory:
+- [] Pragmatic Category Theory | Part 1: Semigroup Intro: https://chshersh.com/blog/2024-07-30-pragmatic-category-theory-part-01.html
+
