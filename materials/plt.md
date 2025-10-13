@@ -1,6 +1,6 @@
 # Programming Language Theory Materials
 
-Type Theory 
+Type Theory:
 - [ ] How should I read type system notation: https://langdev.stackexchange.com/questions/2692/how-should-i-read-type-system-notation/2693#2693
 - [ ] Spartan Type Theory: https://github.com/UniMath/Schools/blob/master/2019-04-Birmingham/Part1_Spartan_Type_Theory/Spartan-Type-Theory.pdf
 - [ ] Introduction to Univalent Foundations of Mathematics with Agda: https://martinescardo.github.io/HoTT-UF-in-Agda-Lecture-Notes/HoTT-UF-Agda.html
@@ -18,4 +18,5 @@ Type Theory 
 
 Category Theory:
 - [] Pragmatic Category Theory | Part 1: Semigroup Intro: https://chshersh.com/blog/2024-07-30-pragmatic-category-theory-part-01.html
+- [] Foundations of Mathematics: https://www.youtube.com/watch?v=HsUxn2l1Wzk&list=PLCTMeyjMKRkqTM2-9HXH81tvpdROs-nz3
 
