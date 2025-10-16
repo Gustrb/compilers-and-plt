@@ -19,4 +19,4 @@ Type Theory:
 Category Theory:
 - [] Pragmatic Category Theory | Part 1: Semigroup Intro: https://chshersh.com/blog/2024-07-30-pragmatic-category-theory-part-01.html
 - [] Foundations of Mathematics: https://www.youtube.com/watch?v=HsUxn2l1Wzk&list=PLCTMeyjMKRkqTM2-9HXH81tvpdROs-nz3
-
+- [] Basic category theory: https://arxiv.org/pdf/1612.09375

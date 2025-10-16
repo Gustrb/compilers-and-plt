@@ -91,3 +91,32 @@ fastExp x n =
 -- the result is (prod 3) :: (Int -> Int)
 -- And when we do (prod 3) 5 :: Int
 
+addVectors :: (Double, Double) -> (Double, Double) -> (Double, Double)
+addVectors a b = (fst a + fst b, snd a + snd b)
+
+addVectors' :: (Double, Double) -> (Double, Double) -> (Double, Double)
+addVectors' (x1, y1) (x2, y2) = (x1 + x2, y1 + y2)
+
+-- We have the built-in fst and snd to get the first and second elements
+-- of a tuple, but what if we want more?
+first :: (a, b, c) -> a
+first (x, _, _) = x
+
+second :: (a, b, c) -> b
+second (_, x, _) = x
+
+third :: (a, b, c) -> c
+third (_, _, x) = x
+
+head' :: [a] -> a
+head' [] = error "Can't call head on an empty list, dummy!" 
+head' (x:_) = x 
+
+sum' :: [Integer] -> Integer 
+sum' [] = 0 
+sum' (x:xs) = x + sum' xs
+
+firstLetter :: String -> String
+firstLetter "" = "Empty string whoopsie!"
+firstLetter all@(x:xs) = "The first letter of " ++ all ++ " is " ++ [x]
+
