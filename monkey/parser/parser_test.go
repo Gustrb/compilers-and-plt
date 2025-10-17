@@ -240,6 +240,8 @@ func TestOperatorPrecedenceParsing(t *testing.T) {
 		{input: "a + add(b * c) + d", expected: "((a + add((b * c))) + d)"},
 		{input: "add(a, b, 1, 2 * 3, 4 + 5, add(6, 7 * 8))", expected: "add(a, b, 1, (2 * 3), (4 + 5), add(6, (7 * 8)))"},
 		{input: "add(a + b + c * d / f + g)", expected: "add((((a + b) + ((c * d) / f)) + g))"},
+		{input: "a * [1, 2, 3][b * c] * d", expected: "((a * ([1, 2, 3][(b * c)])) * d)"},
+		{input: "add(a * b[2], b[1], 2 * [1, 2][1])", expected: "add((a * (b[2])), (b[1]), (2 * ([1, 2][1])))"},
 	}
 
 	for _, tt := range tests {
@@ -506,6 +508,82 @@ func TestCallExpressionParsing(t *testing.T) {
 	testLiteralExpression(t, call.Arguments[0], 1)
 	testInfixExpression(t, call.Arguments[1], 2, "*", 3)
 	testInfixExpression(t, call.Arguments[2], 4, "+", 5)
+}
+
+func TestStringLiteralExpression(t *testing.T) {
+	input := `"hello world";`
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt := program.Statements[0].(*ast.ExpressionStatement)
+	literal, ok := stmt.Expression.(*ast.StringLiteral)
+	if !ok {
+		t.Fatalf("exp not *ast.StringLiteral. got=%T", stmt.Expression)
+	}
+
+	if literal.Value != "hello world" {
+		t.Errorf("literal.Value not 'hello world'. got=%q", literal.Value)
+	}
+}
+
+func TestArrayLiteralParsing(t *testing.T) {
+	input := "[1, 2 * 2, 3 + 3]"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T", program.Statements[0])
+	}
+
+	literal, ok := stmt.Expression.(*ast.ArrayLiteral)
+	if !ok {
+		t.Fatalf("exp not *ast.ArrayLiteral. got=%T", stmt.Expression)
+	}
+
+	if len(literal.Elements) != 3 {
+		t.Fatalf("array literal does not contain 3 elements. got=%d", len(literal.Elements))
+	}
+
+	testLiteralExpression(t, literal.Elements[0], 1)
+	testInfixExpression(t, literal.Elements[1], 2, "*", 2)
+	testInfixExpression(t, literal.Elements[2], 3, "+", 3)
+}
+
+func TestParsingIndexExpression(t *testing.T) {
+	input := "myArray[1 + 1]"
+
+	l := lexer.New(input)
+	p := New(l)
+
+	program := p.ParseProgram()
+	checkParserErrors(t, p)
+
+	stmt, ok := program.Statements[0].(*ast.ExpressionStatement)
+	if !ok {
+		t.Fatalf("program.Statements[0] is not ast.ExpressionStatement. got=%T", program.Statements[0])
+	}
+
+	exp, ok := stmt.Expression.(*ast.IndexExpression)
+	if !ok {
+		t.Fatalf("exp not *ast.IndexExpression. got=%T", stmt.Expression)
+	}
+
+	if !testIdentifier(t, exp.Left, "myArray") {
+		return
+	}
+
+	if !testInfixExpression(t, exp.Index, 1, "+", 1) {
+		return
+	}
 }
 
 func testLetStatement(t *testing.T, s ast.Statement, name string) bool {
