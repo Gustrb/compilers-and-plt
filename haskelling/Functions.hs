@@ -120,3 +120,29 @@ firstLetter :: String -> String
 firstLetter "" = "Empty string whoopsie!"
 firstLetter all@(x:xs) = "The first letter of " ++ all ++ " is " ++ [x]
 
+bmiTell :: Double -> String
+bmiTell bmi
+  | bmi <= 18.5 = "You are underweight, you emo, you!"
+  | bmi <= 25.0 = "You are supposedly normal..."
+  | bmi <= 30.0 = "You are fat! Lose some weight!"
+  | otherwise = "You are a whale, congrats"
+
+max' :: (Ord a) => a -> a -> a 
+max' a b
+  | a <= b = b 
+  | otherwise = a
+
+myCompare :: (Ord a) => a -> a -> Ordering
+a `myCompare` b
+  | a == b = EQ
+  | a <= b = LT
+  | otherwise = GT
+
+bmiTell' weight height
+  | bmi <= 18.5 = "You are underweight, you emo, you!"
+  | bmi <= 25.0 = "You are supposedly normal..."
+  | bmi <= 30.0 = "You are fat! Lose some weight!"
+  | otherwise = "You are a whale, congrats"
+  where bmi = weight / height^2
+
+
