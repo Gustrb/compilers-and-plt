@@ -1,6 +1,10 @@
 package evaluator
 
-import "github.com/gustrb/compilers-and-plt/monkey/object"
+import (
+	"fmt"
+
+	"github.com/gustrb/compilers-and-plt/monkey/object"
+)
 
 var builtins = map[string]*object.Builtin{
 	"len": {
@@ -92,6 +96,14 @@ var builtins = map[string]*object.Builtin{
 			copy(newElements, arr.Elements)
 			newElements[length] = args[1]
 			return &object.Array{Elements: newElements}
+		},
+	},
+	"puts": {
+		Fn: func(args ...object.Object) object.Object {
+			for _, arg := range args {
+				fmt.Println(arg.Inspect())
+			}
+			return NULL
 		},
 	},
 }
