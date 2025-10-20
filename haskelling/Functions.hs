@@ -145,4 +145,21 @@ bmiTell' weight height
   | otherwise = "You are a whale, congrats"
   where bmi = weight / height^2
 
+-- The only difference between a where and let ... in
+-- is that the let is an expression
+-- For instance: (let a = 10; in a * 2) == 20
+cylinder :: Double -> Double -> Double
+cylinder r h =
+  let sideArea = 2 * pi * r * h
+      topArea = pi * r^2
+  in sideArea + 2 * topArea
 
+-- We can also introduce a function in the local scope of an expressiom i.e.
+-- [let square x = x * x in (square 5, square 3, square 2)]
+calcBmis :: [(Double, Double)] -> [Double]
+calcBmis xs = [bmi | (w, h) <- xs, let bmi = w / h^2, bmi > 25.0]
+
+myHead :: [a] -> a
+myHead xs = case xs of
+  [] -> error "No head for empty lists!"
+  (x:_) -> x
