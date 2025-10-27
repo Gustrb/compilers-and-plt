@@ -9,6 +9,7 @@
 #define E_LITERAL_TOO_LARGE 3
 #define E_UNKNOWN_TOKEN 4
 #define E_UNKNOWN_EXPR 5
+#define E_NOT_IMPLEMENTED 6
 
 #define IS_DIGIT(c) (c >= '0' && c <= '9')
 
@@ -27,6 +28,7 @@ void lexer_read_char(lexer_t *lexer);
 typedef enum {
   TOKEN_TYPE_NUMERIC_LITERAL,
   TOKEN_TYPE_PLUS,
+  TOKEN_TYPE_MINUS,
   TOKEN_TYPE_EOF,
 } token_type_t;
 
@@ -53,6 +55,7 @@ typedef struct {
 typedef enum {
   EXPRESSION_TYPE_INTEGER_LITERAL,
   EXPRESSION_TYPE_UNARY_PLUS,
+  EXPRESSION_TYPE_UNARY_MINUS,
 } expression_type_t;
 
 typedef struct {
@@ -69,13 +72,19 @@ typedef struct {
   expression_t *value;
 } expression_unary_plus_t;
 
+typedef struct {
+  expression_t *value;
+} expression_unary_minus_t;
+
 typedef int (*prefix_parse_fn_t)(parser_t *, expression_t *out);
 
 int parse_numeric_literal(parser_t *p, expression_t *out);
 int parse_unary_plus(parser_t *p, expression_t *out);
+int parse_unary_minus(parser_t *p, expression_t *out);
 
 static const prefix_parse_fn_t infix_parse_fns[] = {
   [TOKEN_TYPE_PLUS] = parse_unary_plus,
+  [TOKEN_TYPE_MINUS] = parse_unary_minus,
   [TOKEN_TYPE_NUMERIC_LITERAL] = parse_numeric_literal,
 };
 
@@ -86,6 +95,7 @@ void debug_expressions(expression_t *root);
 
 typedef enum {
   INSTRUCTION_TYPE_MOV_LITERAL,
+  INSTRUCTION_TYPE_MUL_CONSTANT,
 } instruction_type_t;
 
 typedef struct {
@@ -97,6 +107,10 @@ typedef struct {
   int lit;
 } instruction_move_literal_t;
 
+typedef struct {
+  int lit;
+} instruction_mul_constant_t;
+
 // IR things
 typedef struct {
   instruction_t *data;
@@ -105,6 +119,7 @@ typedef struct {
 } instructions_t;
 
 int push_instruction(arena_t *arena, instructions_t *inst, instruction_t *i);
+int emit_mul_instruction(arena_t *arena, int value, instructions_t *inst);
 int emit_mov_literal(arena_t *arena, int value, instructions_t *inst);
 int compile_expression_into_ir(arena_t *arena, expression_t *expr, instructions_t *inst);
 
@@ -148,6 +163,10 @@ int main(int argc, const char **argv)
       {
         printf("token.t = TOKEN_TYPE_PLUS\n");
       }; break;
+      case TOKEN_TYPE_MINUS:
+      {
+        printf("token.t = TOKEN_TYPE_MINUS\n");
+      }; break;
       default:
         printf("ERROR: token type not supported\n");
     }
@@ -163,12 +182,14 @@ int main(int argc, const char **argv)
   parser_t p = {.arena=&arena};
   if ((err = parser_init(&p, expr, len)) != 0)
   {
+    printf("ERROR: Failed to initialize parser: Code = %d\n", err);
     return err;
   }
 
   expression_t root;
   if ((err = parser_parse_expression(&p, &root)) != 0)
   {
+    printf("ERROR: Failed to parse expression: Code = %d\n", err);
     return err;
   }
 #ifdef DEBUG
@@ -178,6 +199,7 @@ int main(int argc, const char **argv)
   instructions_t inst = {.cap=0, .len=0};
   if ((err = compile_expression_into_ir(&arena, &root, &inst)) != 0)
   {
+    printf("ERROR: Failed to compile expression into IR: Code = %d\n", err);
     return err;
   }
 
@@ -192,6 +214,7 @@ int main(int argc, const char **argv)
 
   if ((err = compile_instructions_to_x86_64(&inst, outfile)) != 0)
   {
+    printf("ERROR: Failed to compile expression into asm: Code = %d\n", err);
     fclose(outfile);
     return err;
   }
@@ -200,26 +223,31 @@ int main(int argc, const char **argv)
 
   if ((err = system("nasm -f elf64 out.asm -o out.o")) != 0)
   {
+    printf("ERROR: Failed to compile assembly: Code = %d\n", err);
     return err;
   }
 
   if ((err = system("ld out.o -o out")) != 0)
   {
+    printf("ERROR: Failed to link code: Code = %d\n", err);
     return err;
   }
 
   if ((err = system("rm out.o")) != 0)
   {
+    printf("ERROR: Failed to remove junk: Code = %d\n", err);
     return err;
   }
 
   if ((err = system("rm out.asm")) != 0)
   {
+    printf("ERROR: Failed to remove junk: Code = %d\n", err);
     return err;
   }
 
-
   arena_free(&arena);
+
+  printf("Compiled expression ./out\n");
   return 0;
 }
 
@@ -270,6 +298,9 @@ int lexer_next_token(lexer_t *lexer, token_t *token)
     return 0;
   case '+':
     token->t = TOKEN_TYPE_PLUS;
+    break;
+  case '-':
+    token->t = TOKEN_TYPE_MINUS;
     break;
   default:
     if (IS_DIGIT(lexer->ch))
@@ -418,6 +449,43 @@ int parse_unary_plus(parser_t *p, expression_t *out)
   return 0;
 }
 
+int parse_unary_minus(parser_t *p, expression_t *out)
+{
+  assert(p != NULL);
+  assert(out != NULL);
+
+  expression_unary_minus_t *lit = arena_alloc(p->arena, sizeof(expression_unary_minus_t));
+  if (!lit)
+  {
+    return E_OOM;
+  }
+
+  expression_t *right = arena_alloc(p->arena, sizeof(expression_t));
+  if (!right)
+  {
+    return E_OOM;
+  }
+
+  int err = parser_next_token(p);
+  if (err != 0)
+  {
+    return err;
+  }
+
+  err = parser_parse_expression(p, right);
+  if (err != 0)
+  {
+    return err;
+  }
+
+  lit->value = right;
+
+  out->t = EXPRESSION_TYPE_UNARY_MINUS;
+  out->v = (void*)lit;
+
+  return 0;
+}
+
 // typedef int (*prefix_parse_fn_t)(parser_t *, expression_t *out);
 int parser_parse_expression(parser_t *p, expression_t *e)
 {
@@ -439,6 +507,12 @@ void debug_expressions(expression_t *root)
     {
       expression_unary_plus_t *lit = (expression_unary_plus_t*)root->v;
       printf("+");
+      debug_expressions(lit->value);
+    }; break;
+    case EXPRESSION_TYPE_UNARY_MINUS:
+    {
+      expression_unary_plus_t *lit = (expression_unary_plus_t*)root->v;
+      printf("-");
       debug_expressions(lit->value);
     }; break;
   }
@@ -505,6 +579,36 @@ int emit_mov_literal(arena_t *arena, int value, instructions_t *inst)
   return push_instruction(arena, inst, instruction);
 }
 
+int emit_mul_instruction(arena_t *arena, int value, instructions_t *inst)
+{
+  assert(arena != NULL);
+  assert(inst != NULL);
+
+  instruction_mul_constant_t *mulconst = arena_alloc(arena, sizeof(instruction_mul_constant_t));
+  if (mulconst == NULL)
+  {
+    return E_OOM;
+  }
+
+  mulconst->lit = value;
+
+  instruction_t *instruction = arena_alloc(arena, sizeof(instruction_t));
+  if (instruction == NULL)
+  {
+    return E_OOM;
+  }
+
+  instruction->t = INSTRUCTION_TYPE_MUL_CONSTANT;
+  instruction->data = (void*)mulconst;
+
+#ifdef DEBUG
+  printf("Emmiting mul instruction, value: %d\n", mulconst->lit);
+#endif
+
+  return push_instruction(arena, inst, instruction);
+
+}
+
 int compile_expression_into_ir(arena_t *arena, expression_t *expr, instructions_t *inst)
 {
   assert(arena != NULL);
@@ -528,6 +632,19 @@ int compile_expression_into_ir(arena_t *arena, expression_t *expr, instructions_
       // Just a noop
       expression_unary_plus_t *lit = (expression_unary_plus_t*)expr->v;
       if ((err = compile_expression_into_ir(arena, lit->value, inst)) != 0)
+      {
+          return err;
+      }
+    }; break;
+    case EXPRESSION_TYPE_UNARY_MINUS:
+    {
+      expression_unary_minus_t *lit = (expression_unary_minus_t*)expr->v;
+      if ((err = compile_expression_into_ir(arena, lit->value, inst)) != 0)
+      {
+          return err;
+      }
+
+      if ((err = emit_mul_instruction(arena, -1, inst)) != 0) 
       {
           return err;
       }
@@ -559,6 +676,18 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
           instruction_move_literal_t *movlit = (instruction_move_literal_t*) aux->data;
           fprintf(fptr, "\tmov rax, %d\n", movlit->lit);
       }; break;
+      case INSTRUCTION_TYPE_MUL_CONSTANT:
+      {
+          instruction_mul_constant_t *mulconst = (instruction_mul_constant_t*) aux->data;
+          if (mulconst->lit == -1)
+          {
+            fprintf(fptr, "\tneg rax\n");
+          }
+          else
+          {
+            return E_NOT_IMPLEMENTED;
+          }
+      }; break;
     }
   }
 
@@ -572,7 +701,9 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
 
   fprintf(fptr, "%s", exit_asm);
 
-  const char *print_number_proc ="print_number:\n"
+
+  const char *print_number_proc =
+    "print_number:\n"
     "\tpush rbx\n"
     "\tpush rcx\n"
     "\tpush rdx\n"
@@ -586,27 +717,34 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
     "\tmov byte [rsi], 10\n"
     "\tinc rcx\n"
     "\tcmp rax, 0\n"
-    "\tjne .build_loop\n"
+    "\tjne .check_negative\n"
     "\tdec rsi\n"
     "\tmov byte [rsi], '0'\n"
     "\tinc rcx\n"
     "\tjmp .do_write\n"
-".build_loop:\n"
-".loop:\n"
-    "\txor rdx, rdx\n"
-    "\tdiv rbx\n"
-    "\tmov r8, rdx\n"
-    "\tcmp r8, 9\n"
-    "\tjle .digit_dec\n"
-    "\tadd r8, 7\n"
-".digit_dec:\n"
-    "\tadd r8, 48\n"
-    "\tdec rsi\n"
-    "\tmov byte [rsi], r8b\n"
-    "\tinc rcx\n"
+    ".check_negative:\n"
+    "\tmov r9, 0\n"
     "\tcmp rax, 0\n"
-    "\tjne .loop\n"
-".do_write:\n"
+    "\tjge .build_loop\n"
+    "\tneg rax\n"
+    "\tmov r9, 1\n"
+    ".build_loop:\n"
+    ".loop:\n"
+    "\txor rdx, rdx\n"
+    "\tmov rbx, 10\n"
+    "\tdiv rbx\n"
+    "\tadd dl, '0'\n"
+    "\tdec rsi\n"
+    "\tmov [rsi], dl\n"
+    "\tinc rcx\n"
+    "\ttest rax, rax\n"
+    "\tjnz .loop\n"
+    "\tcmp r9, 0\n"
+    "\tje .do_write\n"
+    "\tdec rsi\n"
+    "\tmov byte [rsi], '-'\n"
+    "\tinc rcx\n"
+    ".do_write:\n"
     "\tmov rdi, 1\n"
     "\tmov rdx, rcx\n"
     "\tmov rax, 1\n"
