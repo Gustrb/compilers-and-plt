@@ -1,3 +1,3 @@
 all:
-	gcc -o dist/main src/main.c -Wall -Wextra -Werror -pedantic -g
+	gcc -o dist/main src/main.c -DDEBUG -Wall -Wextra -Werror -pedantic -g
 

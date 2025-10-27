@@ -26,6 +26,7 @@ void lexer_read_char(lexer_t *lexer);
 
 typedef enum {
   TOKEN_TYPE_NUMERIC_LITERAL,
+  TOKEN_TYPE_PLUS,
   TOKEN_TYPE_EOF,
 } token_type_t;
 
@@ -51,6 +52,7 @@ typedef struct {
 
 typedef enum {
   EXPRESSION_TYPE_INTEGER_LITERAL,
+  EXPRESSION_TYPE_UNARY_PLUS,
 } expression_type_t;
 
 typedef struct {
@@ -63,11 +65,17 @@ typedef struct {
   int value;
 } expression_integer_literal_t;
 
+typedef struct {
+  expression_t *value;
+} expression_unary_plus_t;
+
 typedef int (*prefix_parse_fn_t)(parser_t *, expression_t *out);
 
 int parse_numeric_literal(parser_t *p, expression_t *out);
+int parse_unary_plus(parser_t *p, expression_t *out);
 
 static const prefix_parse_fn_t infix_parse_fns[] = {
+  [TOKEN_TYPE_PLUS] = parse_unary_plus,
   [TOKEN_TYPE_NUMERIC_LITERAL] = parse_numeric_literal,
 };
 
@@ -135,6 +143,10 @@ int main(int argc, const char **argv)
           printf("%c", tok.start[i]);
         }
         printf("\n");
+      }; break;
+      case TOKEN_TYPE_PLUS:
+      {
+        printf("token.t = TOKEN_TYPE_PLUS\n");
       }; break;
       default:
         printf("ERROR: token type not supported\n");
@@ -256,6 +268,9 @@ int lexer_next_token(lexer_t *lexer, token_t *token)
   case 0:
     token->t = TOKEN_TYPE_EOF;
     return 0;
+  case '+':
+    token->t = TOKEN_TYPE_PLUS;
+    break;
   default:
     if (IS_DIGIT(lexer->ch))
     {
@@ -367,11 +382,47 @@ int parse_numeric_literal(parser_t *p, expression_t *out)
   return 0;
 }
 
+int parse_unary_plus(parser_t *p, expression_t *out)
+{
+  assert(p != NULL);
+  assert(out != NULL);
+
+  expression_unary_plus_t *lit = arena_alloc(p->arena, sizeof(expression_unary_plus_t));
+  if (!lit)
+  {
+    return E_OOM;
+  }
+
+  expression_t *right = arena_alloc(p->arena, sizeof(expression_t));
+  if (!right)
+  {
+    return E_OOM;
+  }
+  int err = parser_next_token(p);
+  if (err != 0)
+  {
+    return err;
+  }
+
+  err = parser_parse_expression(p, right);
+  if (err != 0)
+  {
+    return err;
+  }
+
+  lit->value = right;
+
+  out->t = EXPRESSION_TYPE_UNARY_PLUS;
+  out->v = (void*)lit;
+
+  return 0;
+}
+
 // typedef int (*prefix_parse_fn_t)(parser_t *, expression_t *out);
 int parser_parse_expression(parser_t *p, expression_t *e)
 {
-  prefix_parse_fn_t fn = infix_parse_fns[p->curr_token.t];
-  int err = fn(p, e);
+  prefix_parse_fn_t prefix = infix_parse_fns[p->curr_token.t];
+  int err = prefix(p, e);
   return err;
 }
 
@@ -383,6 +434,12 @@ void debug_expressions(expression_t *root)
     {
       expression_integer_literal_t *lit = (expression_integer_literal_t*)root->v;
       printf("(%d)\n", lit->value);
+    }; break;
+    case EXPRESSION_TYPE_UNARY_PLUS:
+    {
+      expression_unary_plus_t *lit = (expression_unary_plus_t*)root->v;
+      printf("+");
+      debug_expressions(lit->value);
     }; break;
   }
 }
@@ -462,6 +519,15 @@ int compile_expression_into_ir(arena_t *arena, expression_t *expr, instructions_
     {
       expression_integer_literal_t *lit = (expression_integer_literal_t*)expr->v;
       if ((err = emit_mov_literal(arena, lit->value, inst)) != 0) 
+      {
+          return err;
+      }
+    }; break;
+    case EXPRESSION_TYPE_UNARY_PLUS:
+    {
+      // Just a noop
+      expression_unary_plus_t *lit = (expression_unary_plus_t*)expr->v;
+      if ((err = compile_expression_into_ir(arena, lit->value, inst)) != 0)
       {
           return err;
       }
