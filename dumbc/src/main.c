@@ -3,32 +3,14 @@
 #include <string.h>
 #include <assert.h>
 
+#include "arena.c"
+
 #define E_WRONGNUMBEROFARGS 1
-#define E_OOM 2
 #define E_LITERAL_TOO_LARGE 3
+#define E_UNKNOWN_TOKEN 4
+#define E_UNKNOWN_EXPR 5
 
 #define IS_DIGIT(c) (c >= '0' && c <= '9')
-
-typedef struct arena_chunk_t {
-  char initialized;
-
-  char *data;
-  size_t used;
-} arena_chunk_t;
-
-#define ARENA_MAX_CHUNKS 1024
-#define ARENA_CHUNK_SIZE 4096
-
-typedef struct {
-  arena_chunk_t chunks[ARENA_MAX_CHUNKS];
-  size_t num_chunks;
-} arena_t;
-
-int arena_initialize_chunk(arena_chunk_t *chunk);
-void *arena_chunk_allocate(arena_chunk_t *chunk, size_t s);
-void *arena_alloc(arena_t *arena, size_t s);
-void arena_free(arena_t *arena);
-void arena_init(arena_t *arena);
 
 typedef struct {
   const char *expr;
@@ -60,7 +42,7 @@ int lexer_skip_whitespace(lexer_t *lexer);
 
 // Parser things
 typedef struct {
-  arena_t arena;
+  arena_t *arena;
   lexer_t lexer;
 
   token_t curr_token;
@@ -94,6 +76,32 @@ int parser_init(parser_t *p, const char *, size_t);
 int parser_parse_expression(parser_t *p, expression_t *e);
 void debug_expressions(expression_t *root);
 
+typedef enum {
+  INSTRUCTION_TYPE_MOV_LITERAL,
+} instruction_type_t;
+
+typedef struct {
+  instruction_type_t t;
+  void *data;
+} instruction_t;
+
+typedef struct {
+  int lit;
+} instruction_move_literal_t;
+
+// IR things
+typedef struct {
+  instruction_t *data;
+  size_t len;
+  size_t cap;
+} instructions_t;
+
+int push_instruction(arena_t *arena, instructions_t *inst, instruction_t *i);
+int emit_mov_literal(arena_t *arena, int value, instructions_t *inst);
+int compile_expression_into_ir(arena_t *arena, expression_t *expr, instructions_t *inst);
+
+int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr);
+
 int main(int argc, const char **argv)
 {
   arena_t arena;
@@ -106,6 +114,7 @@ int main(int argc, const char **argv)
 
   const char *expr = argv[1];
   size_t len = strlen(expr);
+  int err;
 
 #ifdef DEBUG
   printf("expression to compile: '%s'\n", expr);
@@ -114,7 +123,7 @@ int main(int argc, const char **argv)
   lexer_init(&l, expr, len);
 
   token_t tok;
-  while ((lexer_next_token(&l, &tok) == 0) && tok.t != TOKEN_TYPE_EOF)
+  while ((err = lexer_next_token(&l, &tok)) == 0&& tok.t != TOKEN_TYPE_EOF)
   {
     switch (tok.t)
     {
@@ -131,10 +140,15 @@ int main(int argc, const char **argv)
         printf("ERROR: token type not supported\n");
     }
   }
+
+  if (err != 0)
+  {
+    printf("ERROR: code %d\n", err);
+    return err;
+  }
 #endif
 
-  parser_t p = {.arena=arena};
-  int err;
+  parser_t p = {.arena=&arena};
   if ((err = parser_init(&p, expr, len)) != 0)
   {
     return err;
@@ -148,6 +162,50 @@ int main(int argc, const char **argv)
 #ifdef DEBUG
   debug_expressions(&root);
 #endif
+
+  instructions_t inst = {.cap=0, .len=0};
+  if ((err = compile_expression_into_ir(&arena, &root, &inst)) != 0)
+  {
+    return err;
+  }
+
+#ifdef DEBUG
+  for (size_t i = 0; i < inst.len; ++i)
+  {
+    printf("inst[%zu].t = %d\n", i, inst.data[i].t);
+  }
+#endif
+
+  FILE *outfile = fopen("out.asm", "w");
+
+  if ((err = compile_instructions_to_x86_64(&inst, outfile)) != 0)
+  {
+    fclose(outfile);
+    return err;
+  }
+
+  fclose(outfile);
+
+  if ((err = system("nasm -f elf64 out.asm -o out.o")) != 0)
+  {
+    return err;
+  }
+
+  if ((err = system("ld out.o -o out")) != 0)
+  {
+    return err;
+  }
+
+  if ((err = system("rm out.o")) != 0)
+  {
+    return err;
+  }
+
+  if ((err = system("rm out.asm")) != 0)
+  {
+    return err;
+  }
+
 
   arena_free(&arena);
   return 0;
@@ -203,7 +261,14 @@ int lexer_next_token(lexer_t *lexer, token_t *token)
     {
         token->t = TOKEN_TYPE_NUMERIC_LITERAL; 
         err = lexer_read_integer_literal(lexer, token);
-        return err;
+        if (err != 0)
+        {
+          return err;
+        }
+    }
+    else
+    {
+        return E_UNKNOWN_TOKEN;
     }
     break;
   }
@@ -273,8 +338,7 @@ int parse_numeric_literal(parser_t *p, expression_t *out)
   assert(p != NULL);
   assert(out != NULL);
 
-
-  expression_integer_literal_t *lit = arena_alloc(&p->arena, sizeof(expression_integer_literal_t));
+  expression_integer_literal_t *lit = arena_alloc(p->arena, sizeof(expression_integer_literal_t));
   if (!lit)
   {
     return E_OOM;
@@ -323,64 +387,172 @@ void debug_expressions(expression_t *root)
   }
 }
 
-int arena_initialize_chunk(arena_chunk_t *chunk)
+int push_instruction(arena_t *arena, instructions_t *inst, instruction_t *i)
 {
-  chunk->initialized = 1;
-  chunk->data = malloc(ARENA_CHUNK_SIZE);
-  if (chunk->data == NULL)
+  assert(arena != NULL);
+  assert(inst != NULL);
+  assert(i != NULL);
+
+  if (inst->len + 1 >= inst->cap)
   {
-    return E_OOM;
+    inst->cap = inst->cap == 0 ? 16 : inst->cap*2;
+#ifdef DEBUG
+    printf("reallocating instructions...\n");
+    printf("new capacity: %zu\n", inst->cap);
+#endif
+    instruction_t *data = arena_alloc(arena, sizeof(instruction_t) * inst->cap);
+    if (data == NULL)
+    {
+      return E_OOM;
+    }
+
+    for (size_t i = 0; i < inst->len; ++i)
+    {
+      data[i].t = inst->data[i].t;
+      data[i].data = inst->data[i].data;
+    }
+
+    inst->data = data;
   }
-  chunk->used = 0;
+
+  inst->data[inst->len++] = *i;
   return 0;
 }
 
-void *arena_chunk_allocate(arena_chunk_t *chunk, size_t s)
-{
-  char *start = chunk->data + chunk->used;
-  chunk->used += s;
-  return start;
-}
-
-void *arena_alloc(arena_t *arena, size_t s)
+int emit_mov_literal(arena_t *arena, int value, instructions_t *inst)
 {
   assert(arena != NULL);
+  assert(inst != NULL);
 
-  for (size_t i = 0; i < arena->num_chunks; ++i)
+  instruction_move_literal_t *movlit = arena_alloc(arena, sizeof(instruction_move_literal_t));
+  if (movlit == NULL)
   {
-    arena_chunk_t *aux = &arena->chunks[i];
-    if (aux->initialized && (aux->used + s < ARENA_CHUNK_SIZE))
+    return E_OOM;
+  }
+
+  movlit->lit = value;
+
+  instruction_t *instruction = arena_alloc(arena, sizeof(instruction_t));
+  if (instruction == NULL)
+  {
+    return E_OOM;
+  }
+
+  instruction->t = INSTRUCTION_TYPE_MOV_LITERAL;
+  instruction->data = (void*)movlit;
+
+#ifdef DEBUG
+  printf("Emmiting mov instruction, value: %d\n", movlit->lit);
+#endif
+
+  return push_instruction(arena, inst, instruction);
+}
+
+int compile_expression_into_ir(arena_t *arena, expression_t *expr, instructions_t *inst)
+{
+  assert(arena != NULL);
+  assert(expr != NULL);
+  assert(inst != NULL);
+
+  int err;
+
+  switch (expr->t)
+  {
+    case EXPRESSION_TYPE_INTEGER_LITERAL:
     {
-      return arena_chunk_allocate(aux, s);
+      expression_integer_literal_t *lit = (expression_integer_literal_t*)expr->v;
+      if ((err = emit_mov_literal(arena, lit->value, inst)) != 0) 
+      {
+          return err;
+      }
+    }; break;
+    default: return E_UNKNOWN_EXPR;
+  }
+
+  return 0;
+}
+
+int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
+{
+  assert(inst != NULL);
+  assert(fptr != NULL);
+  const char *header = "bits 64\n"
+    "section .text\n"
+    "global _start\n"
+    "\n_start:\n";
+
+  fprintf(fptr, "%s", header);
+
+  for (size_t i = 0; i < inst->len; ++i)
+  {
+    instruction_t *aux = &inst->data[i];
+    switch(aux->t)
+    {
+      case INSTRUCTION_TYPE_MOV_LITERAL:
+      {
+          instruction_move_literal_t *movlit = (instruction_move_literal_t*) aux->data;
+          fprintf(fptr, "\tmov rax, %d\n", movlit->lit);
+      }; break;
     }
   }
 
-  if (arena->num_chunks >= ARENA_MAX_CHUNKS)
-  {
-    return NULL;
-  }
+  // Printing the stuff that were in rax
+  fprintf(fptr, "\tmov rbx, 10\n");
+  fprintf(fptr, "\tcall print_number\n");
 
-  arena_chunk_t *aux = &arena->chunks[arena->num_chunks++];
-  int err;
-  if ((err = arena_initialize_chunk(aux)) != 0)
-  {
-    return NULL;
-  }
+  const char *exit_asm = "\n\tmov rax, 60\n"
+    "\txor rdi, rdi\n"
+    "\tsyscall\n";
 
-  return arena_chunk_allocate(aux, s);
+  fprintf(fptr, "%s", exit_asm);
+
+  const char *print_number_proc ="print_number:\n"
+    "\tpush rbx\n"
+    "\tpush rcx\n"
+    "\tpush rdx\n"
+    "\tsub rsp, 64\n"
+    "\tlea rsi, [rsp + 64]\n"
+    "\tmov rcx, 0\n"
+    "\tdec rsi\n"
+    "\tmov byte [rsi], 0\n"
+    "\tinc rcx\n"
+    "\tdec rsi\n"
+    "\tmov byte [rsi], 10\n"
+    "\tinc rcx\n"
+    "\tcmp rax, 0\n"
+    "\tjne .build_loop\n"
+    "\tdec rsi\n"
+    "\tmov byte [rsi], '0'\n"
+    "\tinc rcx\n"
+    "\tjmp .do_write\n"
+".build_loop:\n"
+".loop:\n"
+    "\txor rdx, rdx\n"
+    "\tdiv rbx\n"
+    "\tmov r8, rdx\n"
+    "\tcmp r8, 9\n"
+    "\tjle .digit_dec\n"
+    "\tadd r8, 7\n"
+".digit_dec:\n"
+    "\tadd r8, 48\n"
+    "\tdec rsi\n"
+    "\tmov byte [rsi], r8b\n"
+    "\tinc rcx\n"
+    "\tcmp rax, 0\n"
+    "\tjne .loop\n"
+".do_write:\n"
+    "\tmov rdi, 1\n"
+    "\tmov rdx, rcx\n"
+    "\tmov rax, 1\n"
+    "\tsyscall\n"
+    "\tadd rsp, 64\n"
+    "\tpop rdx\n"
+    "\tpop rcx\n"
+    "\tpop rbx\n"
+    "\tret\n";
+
+  fprintf(fptr, "%s", print_number_proc);
+
+  return 0;
 }
 
-void arena_free(arena_t *arena)
-{
-  for (size_t i = 0; i < arena->num_chunks; ++i)
-  {
-    arena_chunk_t *c = &arena->chunks[i];
-    if (c->initialized) free(c->data);
-  }
-}
-
-void arena_init(arena_t *arena)
-{
-  memset(arena->chunks, 0, sizeof(arena_chunk_t) * ARENA_MAX_CHUNKS);
-  arena->num_chunks = 0;
-}
