@@ -36,6 +36,7 @@ typedef enum {
   TOKEN_TYPE_NUMERIC_LITERAL,
   TOKEN_TYPE_PLUS,
   TOKEN_TYPE_MINUS,
+  TOKEN_TYPE_STAR,
   TOKEN_TYPE_EOF,
 } token_type_t;
 
@@ -65,6 +66,7 @@ typedef enum {
   EXPRESSION_TYPE_UNARY_MINUS,
   EXPRESSION_TYPE_BINARY_PLUS,
   EXPRESSION_TYPE_BINARY_MINUS,
+  EXPRESSION_TYPE_BINARY_MUL,
 } expression_type_t;
 
 typedef struct {
@@ -95,6 +97,11 @@ typedef struct {
   expression_t *right;
 } expression_binary_minus_t;
 
+typedef struct {
+  expression_t *left;
+  expression_t *right;
+} expression_binary_mul_t;
+
 typedef int (*prefix_parse_fn_t)(parser_t *, expression_t *out);
 typedef int (*infix_parse_fn_t)(parser_t *, expression_t *left, expression_t *out);
 
@@ -104,6 +111,7 @@ int parse_unary_minus(parser_t *p, expression_t *out);
 
 int parse_binary_plus(parser_t *p, expression_t *left, expression_t *out);
 int parse_binary_minus(parser_t *p, expression_t *left, expression_t *out);
+int parse_multiplication(parser_t *p, expression_t *left, expression_t *out);
 
 #define PREFIX_PARSERS 3
 
@@ -119,16 +127,18 @@ static const prefix_parse_fn_t prefix_parse_fns[PREFIX_PARSERS] = {
   parse_numeric_literal,
 };
 
-#define INFIX_PARSERS 2
+#define INFIX_PARSERS 3
 
 static const token_type_t infix_parse_fns_ts[INFIX_PARSERS] = {
   TOKEN_TYPE_PLUS,
   TOKEN_TYPE_MINUS,
+  TOKEN_TYPE_STAR,
 };
 
 static const infix_parse_fn_t infix_parse_fns[INFIX_PARSERS] = {
   parse_binary_plus,
   parse_binary_minus,
+  parse_multiplication,
 };
 
 int prefix_parse_fns_lookup(token_type_t v, prefix_parse_fn_t *out);
@@ -143,9 +153,11 @@ void debug_expressions(expression_t *root);
 
 typedef enum {
   INSTRUCTION_TYPE_MOV_LITERAL,
+  INSTRUCTION_TYPE_MOV_REGISTER,
   INSTRUCTION_TYPE_MUL_CONSTANT,
   INSTRUCTION_TYPE_ADD_BINARY,
   INSTRUCTION_TYPE_SUB_BINARY,
+  INSTRUCTION_TYPE_MUL_BINARY,
 } instruction_type_t;
 
 typedef struct {
@@ -155,13 +167,30 @@ typedef struct {
 
 typedef enum
 {
-  REG1, REG2,
+  OUT_REG,
+  REG1,
+  REG2,
+  REG3,
+  REG4,
+  REG5,
 } reg_t;
+
+#define MAX_REGS 6
+static reg_t reg_pool[MAX_REGS] = {OUT_REG, REG1, REG2, REG3, REG4, REG5};
+static char reg_used[MAX_REGS];
+
+int register_allocate(reg_t *out);
+void register_free(reg_t r);
 
 typedef struct {
   int lit;
   reg_t r;
 } instruction_move_literal_t;
+
+typedef struct {
+  reg_t from;
+  reg_t to;
+} instruction_move_register_t;
 
 typedef struct {
   int lit;
@@ -178,6 +207,11 @@ typedef struct {
   reg_t reg_b;
 } instruction_sub_expressions_t;
 
+typedef struct {
+  reg_t reg_a;
+  reg_t reg_b;
+} instruction_mul_expressions_t;
+
 // IR things
 typedef struct {
   instruction_t *data;
@@ -187,10 +221,12 @@ typedef struct {
 
 int push_instruction(arena_t *arena, instructions_t *inst, instruction_t *i);
 
-int emit_mul_instruction(arena_t *arena, int value, reg_t reg, instructions_t *inst);
+int emit_mul_constant_instruction(arena_t *arena, int value, reg_t reg, instructions_t *inst);
+int emit_mul_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst);
 int emit_add_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst);
 int emit_sub_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst);
 int emit_mov_literal(arena_t *arena, int value, reg_t reg, instructions_t *inst);
+int emit_mov_register(arena_t *arena, reg_t from, reg_t to, instructions_t *inst);
 int compile_expression_into_ir(arena_t *arena, expression_t *expr, reg_t reg, instructions_t *inst);
 
 const char *compile_get_register_name_from_enum(reg_t reg);
@@ -238,8 +274,11 @@ int main(int argc, const char **argv)
       {
         printf("token.t = TOKEN_TYPE_MINUS\n");
       }; break;
-      default:
-        printf("ERROR: token type not supported\n");
+      case TOKEN_TYPE_STAR:
+      {
+        printf("token.t = TOKEN_TYPE_STAR\n");
+      }; break;
+      case TOKEN_TYPE_EOF: {}; break;
     }
   }
 
@@ -310,13 +349,14 @@ int main(int argc, const char **argv)
     printf("ERROR: Failed to remove junk: Code = %d\n", err);
     return err;
   }
-
+#ifndef DEBUG
   if ((err = system("rm out.asm")) != 0)
   {
 
     printf("ERROR: Failed to remove junk: Code = %d\n", err);
     return err;
   }
+#endif
 
   arena_free(&arena);
 
@@ -374,6 +414,9 @@ int lexer_next_token(lexer_t *lexer, token_t *token)
     break;
   case '-':
     token->t = TOKEN_TYPE_MINUS;
+    break;
+  case '*':
+    token->t = TOKEN_TYPE_STAR;
     break;
   default:
     if (IS_DIGIT(lexer->ch))
@@ -464,6 +507,7 @@ int parser_peek_precedence(token_type_t v)
   { 
     case TOKEN_TYPE_PLUS: return PREDENCE_SUM;
     case TOKEN_TYPE_MINUS: return PREDENCE_SUM;
+    case TOKEN_TYPE_STAR: return PREDENCE_PRODUCT;
 
     default:
       return PREDENCE_LOWEST;
@@ -646,6 +690,41 @@ int parse_binary_minus(parser_t *p, expression_t *left, expression_t *out)
   out->v = (void *)binminus;
   out->t = EXPRESSION_TYPE_BINARY_MINUS;
 
+  return 0;
+}
+
+int parse_multiplication(parser_t *p, expression_t *left, expression_t *out)
+{
+  assert(p != NULL);
+  assert(left != NULL);
+  assert(out != NULL);
+
+  expression_binary_mul_t *binmul = arena_alloc(p->arena, sizeof(expression_binary_mul_t));
+  if (binmul == NULL)
+  {
+    return E_OOM;
+  }
+
+  binmul->left = left;
+  int precedence = parser_peek_precedence(p->curr_token.t);
+  parser_next_token(p);
+
+  expression_t *right = arena_alloc(p->arena, sizeof(expression_t));
+  if (right == NULL)
+  {
+    return E_OOM;
+  }
+
+  int err = parser_parse_expression(p, &right, precedence);
+  if (err != 0)
+  {
+    return err;
+  }
+
+  binmul->right = right;
+
+  out->v = (void *)binmul;
+  out->t = EXPRESSION_TYPE_BINARY_MUL;
 
   return 0;
 }
@@ -755,6 +834,16 @@ void debug_expressions(expression_t *root)
       debug_expressions(lit->right);
       printf(")");
     }; break;
+    case EXPRESSION_TYPE_BINARY_MUL:
+    {
+      expression_binary_mul_t *lit = (expression_binary_mul_t*)root->v;
+      printf("(");
+      debug_expressions(lit->left);
+      printf("*");
+      debug_expressions(lit->right);
+      printf(")");
+    }; break;
+
   }
 }
 
@@ -820,7 +909,33 @@ int emit_mov_literal(arena_t *arena, int value, reg_t reg, instructions_t *inst)
   return push_instruction(arena, inst, instruction);
 }
 
-int emit_mul_instruction(arena_t *arena, int value, reg_t reg, instructions_t *inst)
+int emit_mov_register(arena_t *arena, reg_t from, reg_t to, instructions_t *inst)
+{
+  assert(arena != NULL);
+  assert(inst != NULL);
+
+  instruction_move_register_t *mov = arena_alloc(arena, sizeof(instruction_move_register_t));
+  if (mov == NULL)
+  {
+    return E_OOM;
+  }
+
+  mov->from = from;
+  mov->to = to;
+
+  instruction_t *instruction = arena_alloc(arena, sizeof(instruction_t));
+  if (instruction == NULL)
+  {
+    return E_OOM;
+  }
+
+  instruction->t = INSTRUCTION_TYPE_MOV_REGISTER;
+  instruction->data = (void*)mov;
+
+  return push_instruction(arena, inst, instruction);
+}
+
+int emit_mul_constant_instruction(arena_t *arena, int value, reg_t reg, instructions_t *inst)
 {
   assert(arena != NULL);
   assert(inst != NULL);
@@ -901,6 +1016,33 @@ int emit_sub_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_
   instruction->data = (void*)subexpr;
 
   return push_instruction(arena, inst, instruction);
+}
+
+
+int emit_mul_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst)
+{
+  assert(arena != NULL);
+  assert(inst != NULL);
+
+  instruction_mul_expressions_t *mulexpr = arena_alloc(arena, sizeof(instruction_mul_expressions_t));
+  if (mulexpr == NULL)
+  {
+    return E_OOM;
+  }
+
+  mulexpr->reg_a = reg_a;
+  mulexpr->reg_b = reg_b;
+
+  instruction_t *instruction = arena_alloc(arena, sizeof(instruction_t));
+  if (instruction == NULL)
+  {
+    return E_OOM;
+  }
+
+  instruction->t = INSTRUCTION_TYPE_MUL_BINARY;
+  instruction->data = (void*)mulexpr;
+
+  return push_instruction(arena, inst, instruction);
 
 }
 
@@ -939,49 +1081,128 @@ int compile_expression_into_ir(arena_t *arena, expression_t *expr, reg_t reg, in
           return err;
       }
 
-      if ((err = emit_mul_instruction(arena, -1, reg, inst)) != 0) 
+      if ((err = emit_mul_constant_instruction(arena, -1, reg, inst)) != 0) 
       {
           return err;
       }
     }; break;
     case EXPRESSION_TYPE_BINARY_PLUS:
     {
+      reg_t left_reg;
+      reg_t right_reg;
+
+      if ((err = register_allocate(&left_reg)) != 0)
+      {
+        return err;
+      }
+
+      if ((err = register_allocate(&right_reg)) != 0)
+      {
+        return err;
+      }
+
       expression_binary_plus_t *lit = (expression_binary_plus_t*)expr->v;
-      if ((err = compile_expression_into_ir(arena, lit->left, REG1, inst)) != 0)
+      if ((err = compile_expression_into_ir(arena, lit->left, left_reg, inst)) != 0)
       {
           return err;
       }
 
-      if ((err = compile_expression_into_ir(arena, lit->right, REG2, inst)) != 0)
+      if ((err = compile_expression_into_ir(arena, lit->right, right_reg, inst)) != 0)
       {
           return err;
       }
 
-      if ((err = emit_add_instruction(arena, REG1, REG2, inst)) != 0)
+      if ((err = emit_add_instruction(arena, left_reg, right_reg, inst)) != 0)
       {
           return err;
+      }
+
+      if (left_reg != reg)
+      {
+        if ((err = emit_mov_register(arena, left_reg, reg, inst)) != 0)
+        {
+          return err;
+        }
       }
     }; break;
     case EXPRESSION_TYPE_BINARY_MINUS:
     {
+      reg_t left_reg;
+      reg_t right_reg;
+
+      if ((err = register_allocate(&left_reg)) != 0)
+      {
+        return err;
+      }
+
+      if ((err = register_allocate(&right_reg)) != 0)
+      {
+        return err;
+      }
+
       expression_binary_minus_t *lit = (expression_binary_minus_t*)expr->v;
-      if ((err = compile_expression_into_ir(arena, lit->left, REG1, inst)) != 0)
+      if ((err = compile_expression_into_ir(arena, lit->left, left_reg, inst)) != 0)
       {
           return err;
       }
 
-      if ((err = compile_expression_into_ir(arena, lit->right, REG2, inst)) != 0)
+      if ((err = compile_expression_into_ir(arena, lit->right, right_reg, inst)) != 0)
       {
           return err;
       }
 
-      if ((err = emit_sub_instruction(arena, REG1, REG2, inst)) != 0)
+      if ((err = emit_sub_instruction(arena, left_reg, right_reg, inst)) != 0)
       {
           return err;
+      }
+
+      if (left_reg != reg)
+      {
+        if ((err = emit_mov_register(arena, left_reg, reg, inst)) != 0)
+        {
+          return err;
+        }
       }
     }; break;
- 
-    default: return E_UNKNOWN_EXPR;
+    case EXPRESSION_TYPE_BINARY_MUL:
+    {
+      reg_t left_reg;
+      reg_t right_reg;
+
+      if ((err = register_allocate(&left_reg)) != 0)
+      {
+        return err;
+      }
+
+      if ((err = register_allocate(&right_reg)) != 0)
+      {
+        return err;
+      }
+
+      expression_binary_mul_t *lit = (expression_binary_mul_t*)expr->v;
+      if ((err = compile_expression_into_ir(arena, lit->left, left_reg, inst)) != 0)
+      {
+        return err;
+      }
+
+      if ((err = compile_expression_into_ir(arena, lit->right, right_reg, inst)) != 0)
+      {
+        return err;
+      }
+
+      if ((err = emit_mul_instruction(arena, left_reg, right_reg, inst)) != 0)
+      {
+        return err;
+      }
+
+      if (left_reg != reg)
+      {
+        if ((err = emit_mov_register(arena, left_reg, reg, inst)) != 0)
+        {
+          return err;
+        }
+      }
+    }; break;
   }
 
   return 0;
@@ -991,8 +1212,12 @@ const char *compile_get_register_name_from_enum(reg_t reg)
 {
   switch (reg)
   {
-    case REG1: return "rax";
-    case REG2: return "rbx";
+    case OUT_REG: return "rax";
+    case REG1: return "rbx";
+    case REG2: return "rcx";
+    case REG3: return "rdx";
+    case REG4: return "rsi";
+    case REG5: return "rdi";
     default: return NULL;
   }
 }
@@ -1013,6 +1238,18 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
     instruction_t *aux = &inst->data[i];
     switch(aux->t)
     {
+      case INSTRUCTION_TYPE_MOV_REGISTER:
+      {
+          instruction_move_register_t *mov = (instruction_move_register_t*) aux->data; 
+          const char *to_reg_name = compile_get_register_name_from_enum(mov->to);
+          const char *from_reg_name = compile_get_register_name_from_enum(mov->from);
+          if (to_reg_name == NULL || from_reg_name == NULL)
+          {
+            return E_BADREGISTER;
+          }
+
+          fprintf(fptr, "\tmov %s, %s\n", to_reg_name, from_reg_name);
+      }; break;
       case INSTRUCTION_TYPE_MOV_LITERAL:
       {
           instruction_move_literal_t *movlit = (instruction_move_literal_t*) aux->data;
@@ -1038,19 +1275,19 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
       case INSTRUCTION_TYPE_ADD_BINARY:
       {
         instruction_add_expressions_t *addexpr = (instruction_add_expressions_t*)aux->data;
-        // reg_a => rax
-        // reg_b => rbx
-        if (addexpr->reg_a != REG1)
+        const char *reg_a_name = compile_get_register_name_from_enum(addexpr->reg_a);
+        if (reg_a_name == NULL)
         {
-            return E_BADREGISTER;
+          return E_BADREGISTER;
         }
 
-        if (addexpr->reg_b != REG2)
+        const char *reg_b_name = compile_get_register_name_from_enum(addexpr->reg_b);
+        if (reg_a_name == NULL)
         {
-            return E_BADREGISTER;
+          return E_BADREGISTER;
         }
 
-        fprintf(fptr, "\tadd rax, rbx\n");
+        fprintf(fptr, "\tadd %s, %s\n", reg_a_name, reg_b_name);
       }; break;
       case INSTRUCTION_TYPE_SUB_BINARY:
       {
@@ -1066,6 +1303,23 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
         }
 
         fprintf(fptr, "\tsub rax, rbx\n");
+      }; break;
+      case INSTRUCTION_TYPE_MUL_BINARY:
+      {
+        instruction_mul_expressions_t *mulexpr = (instruction_mul_expressions_t*)aux->data;
+        const char *reg_a_name = compile_get_register_name_from_enum(mulexpr->reg_a);
+        if (reg_a_name == NULL)
+        {
+          return E_BADREGISTER;
+        }
+
+        const char *reg_b_name = compile_get_register_name_from_enum(mulexpr->reg_b);
+        if (reg_a_name == NULL)
+        {
+          return E_BADREGISTER;
+        }
+
+        fprintf(fptr, "\timul %s, %s\n", reg_a_name, reg_b_name);
       }; break;
     }
   }
@@ -1137,5 +1391,31 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
   fprintf(fptr, "%s", print_number_proc);
 
   return 0;
+}
+
+int register_allocate(reg_t *out)
+{
+  for (size_t i = 0; i < MAX_REGS; ++i)
+  {
+    if (!reg_used[i])
+    {
+      reg_used[i] = 1;
+      *out = reg_pool[i];
+      return 0;
+    }
+  }
+  return E_BADREGISTER;
+}
+
+void register_free(reg_t r)
+{
+  for (size_t i = 0; i < MAX_REGS; ++i)
+  {
+    if (reg_pool[i] == r)
+    {
+      reg_used[i] = 0;
+      return;
+    }
+  }
 }
 
