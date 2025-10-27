@@ -12,6 +12,7 @@
 #define E_NOT_IMPLEMENTED 6
 #define E_INVALID_PREFIX_FN 7
 #define E_BADREGISTER 8
+#define E_UNCLOSED_PAREN 9
 
 #define IS_DIGIT(c) (c >= '0' && c <= '9')
 
@@ -37,6 +38,8 @@ typedef enum {
   TOKEN_TYPE_PLUS,
   TOKEN_TYPE_MINUS,
   TOKEN_TYPE_STAR,
+  TOKEN_TYPE_LPAREN,
+  TOKEN_TYPE_RPAREN,
   TOKEN_TYPE_EOF,
 } token_type_t;
 
@@ -108,23 +111,26 @@ typedef int (*infix_parse_fn_t)(parser_t *, expression_t *left, expression_t *ou
 int parse_numeric_literal(parser_t *p, expression_t *out);
 int parse_unary_plus(parser_t *p, expression_t *out);
 int parse_unary_minus(parser_t *p, expression_t *out);
+int parse_grouped(parser_t *p, expression_t *out);
 
 int parse_binary_plus(parser_t *p, expression_t *left, expression_t *out);
 int parse_binary_minus(parser_t *p, expression_t *left, expression_t *out);
 int parse_multiplication(parser_t *p, expression_t *left, expression_t *out);
 
-#define PREFIX_PARSERS 3
+#define PREFIX_PARSERS 4
 
 static const token_type_t prefix_parse_fns_ts[PREFIX_PARSERS] = {
   TOKEN_TYPE_PLUS,
   TOKEN_TYPE_MINUS,
   TOKEN_TYPE_NUMERIC_LITERAL,
+  TOKEN_TYPE_LPAREN,
 };
 
 static const prefix_parse_fn_t prefix_parse_fns[PREFIX_PARSERS] = {
   parse_unary_plus,
   parse_unary_minus,
   parse_numeric_literal,
+  parse_grouped,
 };
 
 #define INFIX_PARSERS 3
@@ -278,6 +284,14 @@ int main(int argc, const char **argv)
       {
         printf("token.t = TOKEN_TYPE_STAR\n");
       }; break;
+      case TOKEN_TYPE_LPAREN:
+      {
+        printf("token.t = TOKEN_TYPE_LPAREN\n");
+      }; break;
+      case TOKEN_TYPE_RPAREN:
+      {
+        printf("token.t = TOKEN_TYPE_RPAREN\n");
+      }; break;
       case TOKEN_TYPE_EOF: {}; break;
     }
   }
@@ -417,6 +431,12 @@ int lexer_next_token(lexer_t *lexer, token_t *token)
     break;
   case '*':
     token->t = TOKEN_TYPE_STAR;
+    break;
+  case '(':
+    token->t = TOKEN_TYPE_LPAREN;
+    break;
+  case ')':
+    token->t = TOKEN_TYPE_RPAREN;
     break;
   default:
     if (IS_DIGIT(lexer->ch))
@@ -617,6 +637,38 @@ int parse_unary_minus(parser_t *p, expression_t *out)
 
   out->t = EXPRESSION_TYPE_UNARY_MINUS;
   out->v = (void*)lit;
+
+  return 0;
+}
+
+int parse_grouped(parser_t *p, expression_t *out)
+{
+  assert(p != NULL);
+  assert(out != NULL);
+
+  parser_next_token(p);
+
+  expression_t *expr = arena_alloc(p->arena, sizeof(expression_t));
+  if (expr == NULL)
+  {
+    return E_OOM;
+  }
+  
+  int err;
+  if ((err = parser_parse_expression(p, &expr, PREDENCE_LOWEST)) != 0)
+  {
+    return err;
+  }
+
+  if (p->peek_token.t != TOKEN_TYPE_RPAREN)
+  {
+    return E_UNCLOSED_PAREN;
+  }
+
+  parser_next_token(p);
+
+  out->t = expr->t;
+  out->v = expr->v;
 
   return 0;
 }
