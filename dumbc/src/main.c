@@ -64,6 +64,7 @@ typedef enum {
   EXPRESSION_TYPE_UNARY_PLUS,
   EXPRESSION_TYPE_UNARY_MINUS,
   EXPRESSION_TYPE_BINARY_PLUS,
+  EXPRESSION_TYPE_BINARY_MINUS,
 } expression_type_t;
 
 typedef struct {
@@ -88,6 +89,11 @@ typedef struct {
   expression_t *left;
   expression_t *right;
 } expression_binary_plus_t;
+
+typedef struct {
+  expression_t *left;
+  expression_t *right;
+} expression_binary_minus_t;
 
 typedef int (*prefix_parse_fn_t)(parser_t *, expression_t *out);
 typedef int (*infix_parse_fn_t)(parser_t *, expression_t *left, expression_t *out);
@@ -139,6 +145,7 @@ typedef enum {
   INSTRUCTION_TYPE_MOV_LITERAL,
   INSTRUCTION_TYPE_MUL_CONSTANT,
   INSTRUCTION_TYPE_ADD_BINARY,
+  INSTRUCTION_TYPE_SUB_BINARY,
 } instruction_type_t;
 
 typedef struct {
@@ -166,6 +173,11 @@ typedef struct {
   reg_t reg_b;
 } instruction_add_expressions_t;
 
+typedef struct {
+  reg_t reg_a;
+  reg_t reg_b;
+} instruction_sub_expressions_t;
+
 // IR things
 typedef struct {
   instruction_t *data;
@@ -177,6 +189,7 @@ int push_instruction(arena_t *arena, instructions_t *inst, instruction_t *i);
 
 int emit_mul_instruction(arena_t *arena, int value, reg_t reg, instructions_t *inst);
 int emit_add_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst);
+int emit_sub_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst);
 int emit_mov_literal(arena_t *arena, int value, reg_t reg, instructions_t *inst);
 int compile_expression_into_ir(arena_t *arena, expression_t *expr, reg_t reg, instructions_t *inst);
 
@@ -606,6 +619,34 @@ int parse_binary_minus(parser_t *p, expression_t *left, expression_t *out)
   assert(left != NULL);
   assert(out != NULL);
 
+  expression_binary_minus_t *binminus = arena_alloc(p->arena, sizeof(expression_binary_minus_t));
+  if (binminus == NULL)
+  {
+    return E_OOM;
+  }
+
+  binminus->left = left;
+  int precedence = parser_peek_precedence(p->curr_token.t);
+  parser_next_token(p);
+
+  expression_t *right = arena_alloc(p->arena, sizeof(expression_t));
+  if (right == NULL)
+  {
+    return E_OOM;
+  }
+
+  int err = parser_parse_expression(p, &right, precedence);
+  if (err != 0)
+  {
+    return err;
+  }
+
+  binminus->right = right;
+
+  out->v = (void *)binminus;
+  out->t = EXPRESSION_TYPE_BINARY_MINUS;
+
+
   return 0;
 }
 
@@ -702,6 +743,15 @@ void debug_expressions(expression_t *root)
       printf("(");
       debug_expressions(lit->left);
       printf("+");
+      debug_expressions(lit->right);
+      printf(")");
+    }; break;
+    case EXPRESSION_TYPE_BINARY_MINUS:
+    {
+      expression_binary_minus_t *lit = (expression_binary_minus_t*)root->v;
+      printf("(");
+      debug_expressions(lit->left);
+      printf("-");
       debug_expressions(lit->right);
       printf(")");
     }; break;
@@ -827,6 +877,33 @@ int emit_add_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_
   return push_instruction(arena, inst, instruction);
 }
 
+int emit_sub_instruction(arena_t *arena, reg_t reg_a, reg_t reg_b, instructions_t *inst)
+{
+  assert(arena != NULL);
+  assert(inst != NULL);
+
+  instruction_sub_expressions_t *subexpr = arena_alloc(arena, sizeof(instruction_sub_expressions_t));
+  if (subexpr == NULL)
+  {
+    return E_OOM;
+  }
+
+  subexpr->reg_a = reg_a;
+  subexpr->reg_b = reg_b;
+
+  instruction_t *instruction = arena_alloc(arena, sizeof(instruction_t));
+  if (instruction == NULL)
+  {
+    return E_OOM;
+  }
+
+  instruction->t = INSTRUCTION_TYPE_SUB_BINARY;
+  instruction->data = (void*)subexpr;
+
+  return push_instruction(arena, inst, instruction);
+
+}
+
 int compile_expression_into_ir(arena_t *arena, expression_t *expr, reg_t reg, instructions_t *inst)
 {
   assert(arena != NULL);
@@ -885,6 +962,25 @@ int compile_expression_into_ir(arena_t *arena, expression_t *expr, reg_t reg, in
           return err;
       }
     }; break;
+    case EXPRESSION_TYPE_BINARY_MINUS:
+    {
+      expression_binary_minus_t *lit = (expression_binary_minus_t*)expr->v;
+      if ((err = compile_expression_into_ir(arena, lit->left, REG1, inst)) != 0)
+      {
+          return err;
+      }
+
+      if ((err = compile_expression_into_ir(arena, lit->right, REG2, inst)) != 0)
+      {
+          return err;
+      }
+
+      if ((err = emit_sub_instruction(arena, REG1, REG2, inst)) != 0)
+      {
+          return err;
+      }
+    }; break;
+ 
     default: return E_UNKNOWN_EXPR;
   }
 
@@ -955,6 +1051,21 @@ int compile_instructions_to_x86_64(instructions_t *inst, FILE *fptr)
         }
 
         fprintf(fptr, "\tadd rax, rbx\n");
+      }; break;
+      case INSTRUCTION_TYPE_SUB_BINARY:
+      {
+        instruction_sub_expressions_t *subexpr = (instruction_sub_expressions_t*)aux->data;
+        if (subexpr->reg_a != REG1)
+        {
+            return E_BADREGISTER;
+        }
+
+        if (subexpr->reg_b != REG2)
+        {
+            return E_BADREGISTER;
+        }
+
+        fprintf(fptr, "\tsub rax, rbx\n");
       }; break;
     }
   }
