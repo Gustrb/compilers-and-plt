@@ -163,3 +163,19 @@ myHead :: [a] -> a
 myHead xs = case xs of
   [] -> error "No head for empty lists!"
   (x:_) -> x
+
+-- A function can also take a function, since that in haskell
+-- function are higher-order objects
+applyTwice :: (a -> a) -> a -> a
+applyTwice f x = f (f x)
+
+zipWith' :: (a -> b -> c) -> [a] -> [b] -> [c]
+zipWith' _ [] _ = []
+zipWith' _ _ [] = []
+zipWith' f (x:xs) (y:ys) = f x y : zipWith' f xs ys
+
+-- Since functions are curried
+-- we can do this:
+flip' :: (a -> b -> c) -> (b -> a -> c)
+flip' f y x = f x y
+
