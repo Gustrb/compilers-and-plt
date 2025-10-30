@@ -179,3 +179,25 @@ zipWith' f (x:xs) (y:ys) = f x y : zipWith' f xs ys
 flip' :: (a -> b -> c) -> (b -> a -> c)
 flip' f y x = f x y
 
+mySum :: (Integer -> Integer) -> Integer -> (Integer -> Integer) -> Integer -> Integer
+mySum term a next b
+  | a > b = 0
+  | otherwise = (term a) + (mySum term (next a) next b)
+
+improve :: Double -> Double -> Double 
+improve guess x = average guess (x/guess) 
+
+goodEnough :: Double -> Double -> Bool
+goodEnough guess x = (abs (guess * guess - x)) < 0.001
+
+average :: Double -> Double -> Double
+average x y = (x+y) / 2.0
+ 
+sqrtIter :: Double -> Double -> Double
+sqrtIter guess x
+  | goodEnough guess x = guess
+  | otherwise = sqrtIter (improve guess x) x
+
+sqrt' :: Double -> Double
+sqrt' = sqrtIter 1.0
+
