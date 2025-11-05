@@ -21,3 +21,5 @@ Category Theory:
 - [] Foundations of Mathematics: https://www.youtube.com/watch?v=HsUxn2l1Wzk&list=PLCTMeyjMKRkqTM2-9HXH81tvpdROs-nz3
 - [] Basic category theory: https://arxiv.org/pdf/1612.09375
 
+Combinator Logic:
+- [x] Jim Weirich on the Y-Combinator: https://www.youtube.com/watch?v=FITJMJjASUs
